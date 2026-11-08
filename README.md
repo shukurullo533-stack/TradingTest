@@ -1,2 +1,0 @@
-# TradingTest
-Trading Test Website
