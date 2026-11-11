@@ -1,7 +1,6 @@
-import json
+
 import os
-import hashlib
-import secrets
+import json
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,25 +10,32 @@ from telegram.ext import (
     MessageHandler,
     ChatMemberHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
+# ==================================
 # BOT SOZLAMALARI
-TOKEN = "9244793379:AAGF7Jb6pamh5n3T9lFkZv50JqiAaXA_60g"
-OWNER_ID = 8344141174
-ADMIN_PASSWORD = "535157"
+# ==================================
+
+TOKEN = os.getenv("9244793379:AAGF7Jb6pamh5n3T9lFkZv50JqiAaXA_60g", "9244793379:AAGXtZrud62NsTad9Hhc-fNg6X4HPqCynbQ").strip()
+ADMIN_PASSWORD = os.getenv("535157", "575953").strip()
+
+OWNER_ID = int(os.getenv("OWNER_ID", "8344141174"))
 
 DB_FILE = "bot_data.json"
 MIN_INTERVAL = 60
 
 
-# MA'LUMOTLARNI YUKLASH
+# ==================================
+# MA'LUMOTLAR
+# ==================================
+
 def load_data():
     if os.path.exists(DB_FILE):
         try:
             with open(DB_FILE, "r", encoding="utf-8") as f:
                 result = json.load(f)
-        except (json.JSONDecodeError, OSError):
+        except Exception:
             result = {}
     else:
         result = {}
@@ -39,7 +45,6 @@ def load_data():
     result.setdefault("interval", 300)
     result.setdefault("admin_ids", [OWNER_ID])
     result.setdefault("pending_admins", {})
-    result.setdefault("admin_passwords", {})
 
     if OWNER_ID not in result["admin_ids"]:
         result["admin_ids"].append(OWNER_ID)
@@ -50,154 +55,81 @@ def load_data():
 data = load_data()
 
 
-# MA'LUMOTLARNI SAQLASH
 def save_data():
     with open(DB_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 
-# PAROLNI XESHLASH
-def hash_password(password):
-    salt = secrets.token_hex(16)
-
-    hashed = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt.encode("utf-8"),
-        200000
-    ).hex()
-
-    return salt + ":" + hashed
+def is_admin(user_id):
+    return user_id in data["admin_ids"]
 
 
-# PAROLNI TEKSHIRISH
-def check_password(password, stored):
-    try:
-        salt, saved_hash = stored.split(":", 1)
+# ==================================
+# ADMIN MENYUSI
+# ==================================
 
-        candidate = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode("utf-8"),
-            salt.encode("utf-8"),
-            200000
-        ).hex()
-
-        return secrets.compare_digest(candidate, saved_hash)
-
-    except (ValueError, AttributeError):
-        return False
-
-
-# ADMIN TEKSHIRISH
-def is_admin(update):
-    return (
-        update.effective_user is not None
-        and update.effective_user.id in data["admin_ids"]
-    )
-
-
-# ADMIN PANEL MENYUSI
 def menu():
     keyboard = [
         [
-            InlineKeyboardButton(
-                "✍️ Xabar yozish",
-                callback_data="message"
-            ),
-            InlineKeyboardButton(
-                "⏱ Vaqt sozlash",
-                callback_data="interval"
-            )
+            InlineKeyboardButton("✍️ Xabar yozish", callback_data="message"),
+            InlineKeyboardButton("⏱ Vaqt sozlash", callback_data="interval"),
         ],
         [
-            InlineKeyboardButton(
-                "▶️ Boshlash",
-                callback_data="start"
-            ),
-            InlineKeyboardButton(
-                "⏹ To‘xtatish",
-                callback_data="stop"
-            )
+            InlineKeyboardButton("▶️ Boshlash", callback_data="start"),
+            InlineKeyboardButton("⏹ To‘xtatish", callback_data="stop"),
         ],
         [
-            InlineKeyboardButton(
-                "👥 Guruhlar",
-                callback_data="groups"
-            ),
-            InlineKeyboardButton(
-                "📊 Statistika",
-                callback_data="stats"
-            )
+            InlineKeyboardButton("👥 Guruhlar", callback_data="groups"),
+            InlineKeyboardButton("📊 Statistika", callback_data="stats"),
         ],
         [
-            InlineKeyboardButton(
-                "👑 Adminlar",
-                callback_data="admins"
-            )
+            InlineKeyboardButton("👑 Adminlar", callback_data="admins"),
         ],
         [
-            InlineKeyboardButton(
-                "🔒 Chiqish",
-                callback_data="logout"
-            )
-        ]
+            InlineKeyboardButton("🔒 Chiqish", callback_data="logout"),
+        ],
     ]
 
     return InlineKeyboardMarkup(keyboard)
-# ADMIN PANELGA KIRISH
+
+
+def show_menu_text():
+    return "👑 ADMIN PANELI\n\nKerakli bo‘limni tanlang:"
+
+
+async def send_menu(message):
+    await message.reply_text(
+        show_menu_text(),
+        reply_markup=menu()
+    )
+
+
+# ==================================
+# /START
+# ==================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
 
-    if uid == OWNER_ID:
-        if context.user_data.get("authenticated"):
+    if not is_admin(uid):
+
+        pending = data["pending_admins"]
+
+        if str(uid) in pending:
             await update.message.reply_text(
-                "👑 Asosiy admin paneli",
-                reply_markup=menu()
+                "⏳ Adminlik so‘rovingiz yuborilgan. "
+                "Asosiy admin tasdiqlashini kuting."
             )
             return
 
-        context.user_data["awaiting_password"] = True
+        pending[str(uid)] = {
+            "name": user.full_name,
+            "username": user.username or ""
+        }
+        save_data()
 
-        await update.message.reply_text(
-            "🔐 ASOSIY ADMIN KIRISH\n\nParolni kiriting:"
-        )
-        return
-
-    if uid in data["admin_ids"]:
-        if str(uid) not in data["admin_passwords"]:
-            context.user_data["setting_admin_password"] = True
-
-            await update.message.reply_text(
-                "✅ Siz admin sifatida tasdiqlandingiz.\n\n"
-                "🔐 O‘zingiz uchun yangi parol yarating "
-                "(kamida 6 ta belgi):"
-            )
-        else:
-            context.user_data["awaiting_admin_login"] = True
-
-            await update.message.reply_text(
-                "🔐 Admin paneliga kirish uchun "
-                "shaxsiy parolingizni kiriting:"
-            )
-        return
-
-    if str(uid) in data["pending_admins"]:
-        await update.message.reply_text(
-            "⏳ Adminlik so‘rovingiz yuborilgan. "
-            "Asosiy admin tasdiqlashini kuting."
-        )
-        return
-
-    data["pending_admins"][str(uid)] = {
-        "name": user.full_name,
-        "username": user.username or ""
-    }
-
-    save_data()
-
-    keyboard = InlineKeyboardMarkup([
-        [
+        keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(
                 "✅ Tasdiqlash",
                 callback_data=f"admin:approve:{uid}"
@@ -206,35 +138,58 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "❌ Rad etish",
                 callback_data=f"admin:reject:{uid}"
             )
-        ]
-    ])
+        ]])
 
-    username = f"@{user.username}" if user.username else "Username yo‘q"
+        try:
+            await context.bot.send_message(
+                chat_id=OWNER_ID,
+                text=(
+                    "🔔 YANGI ADMIN SO‘ROVI\n\n"
+                    f"Ismi: {user.full_name}\n"
+                    f"Username: @{user.username or 'yo‘q'}\n"
+                    f"Telegram ID: {uid}"
+                ),
+                reply_markup=keyboard
+            )
 
-    await context.bot.send_message(
-        chat_id=OWNER_ID,
-        text=(
-            "🔔 YANGI ADMIN SO‘ROVI\n\n"
-            f"Ismi: {user.full_name}\n"
-            f"Username: {username}\n"
-            f"Telegram ID: {uid}\n\n"
-            "Bu foydalanuvchini admin qilamizmi?"
-        ),
-        reply_markup=keyboard
-    )
+        except Exception as e:
+            print("Admin so‘rovi yuborilmadi:", e)
+
+            await update.message.reply_text(
+                "❌ Asosiy adminga xabar yuborilmadi. "
+                "Asosiy admin botga avval /start yuborganini tekshiring."
+            )
+            return
+
+        await update.message.reply_text(
+            "✅ Adminlik so‘rovingiz asosiy adminga yuborildi."
+        )
+        return
+
+    if context.user_data.get("authenticated"):
+        await send_menu(update.message)
+        return
+
+    context.user_data["awaiting_code"] = True
 
     await update.message.reply_text(
-        "✅ So‘rovingiz asosiy adminga yuborildi."
+        "🔐 ADMIN KIRISH\n\n"
+        "Umumiy admin kodini kiriting:"
     )
 
 
-# BOT GURUHGA QO‘SHILGANDA
-async def group_member(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    chat = update.my_chat_member.chat
-    status = update.my_chat_member.new_chat_member.status
+# ==================================
+# GURUHLARNI ANIQLASH
+# ==================================
+
+async def group_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    result = update.my_chat_member
+
+    if not result:
+        return
+
+    chat = result.chat
+    status = result.new_chat_member.status
 
     if chat.type not in ("group", "supergroup"):
         return
@@ -250,7 +205,10 @@ async def group_member(
             save_data()
 
 
+# ==================================
 # GURUHLARGA XABAR YUBORISH
+# ==================================
+
 async def broadcast(context: ContextTypes.DEFAULT_TYPE):
     message = data.get("message", "")
 
@@ -263,197 +221,168 @@ async def broadcast(context: ContextTypes.DEFAULT_TYPE):
                 chat_id=group_id,
                 text=message
             )
+
         except Exception as e:
-            print(f"Guruh xatosi {group_id}: {e}")
+            print(f"Guruhga yuborishda xato {group_id}: {e}")
 
 
-# ADMINLAR RO‘YXATI
-async def show_admins(query):
-    lines = ["👑 ADMINLAR RO‘YXATI\n"]
-    keyboard = []
+# ==================================
+# TUGMALAR
+# ==================================
 
-    for admin_id in data["admin_ids"]:
-        if admin_id == OWNER_ID:
-            lines.append(f"⭐ {admin_id} — Asosiy admin")
-            continue
-
-        lines.append(f"👤 {admin_id}")
-
-        keyboard.append([
-            InlineKeyboardButton(
-                f"❌ {admin_id} ni chiqarish",
-                callback_data=f"admin:remove:{admin_id}"
-            )
-        ])
-
-    lines.append(
-        f"\n⏳ Kutilayotgan so‘rovlar: "
-        f"{len(data['pending_admins'])}"
-    )
-
-    keyboard.append([
-        InlineKeyboardButton(
-            "⬅️ Asosiy menyu",
-            callback_data="back_menu"
-        )
-    ])
-
-    await query.message.reply_text(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-# TUGMALARNI BOSHQARISH
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    uid = query.from_user.id
+    user_id = query.from_user.id
     action = query.data
 
-    # ADMIN SO‘ROVLARI
-    if action.startswith("admin:"):
+    # ADMIN SO‘ROVINI TASDIQLASH
+    if action.startswith("admin:approve:"):
 
-        if uid != OWNER_ID or not context.user_data.get("authenticated"):
+        if user_id != OWNER_ID:
             await query.message.reply_text(
-                "⛔ Bu amal faqat asosiy admin uchun."
+                "❌ Siz asosiy admin emassiz."
             )
             return
 
-        parts = action.split(":")
-        operation = parts[1]
-        target_id = int(parts[2])
+        new_admin = int(action.split(":")[2])
+        pending = data["pending_admins"]
 
-        # ADMINNI TASDIQLASH YOKI RAD ETISH
-        if operation in ("approve", "reject"):
-
-            pending = data["pending_admins"].get(str(target_id))
-
-            if not pending:
-                await query.message.reply_text(
-                    "Bu so‘rov topilmadi yoki avval ko‘rib chiqilgan."
-                )
-                return
-
-            if operation == "approve":
-
-                if target_id not in data["admin_ids"]:
-                    data["admin_ids"].append(target_id)
-
-                data["pending_admins"].pop(str(target_id))
-                save_data()
-
-                try:
-                    await context.bot.send_message(
-                        chat_id=target_id,
-                        text=(
-                            "✅ Asosiy admin sizni tasdiqladi.\n"
-                            "Endi /start yuboring va o‘zingiz uchun "
-                            "shaxsiy parol yarating."
-                        )
-                    )
-                except Exception as e:
-                    print(f"Xabar yuborilmadi: {e}")
-
-                await query.edit_message_text(
-                    f"✅ {pending['name']} admin sifatida tasdiqlandi."
-                )
-
-            elif operation == "reject":
-
-                data["pending_admins"].pop(str(target_id))
-                save_data()
-
-                try:
-                    await context.bot.send_message(
-                        chat_id=target_id,
-                        text="❌ Adminlik so‘rovingiz rad etildi."
-                    )
-                except Exception as e:
-                    print(f"Xabar yuborilmadi: {e}")
-
-                await query.edit_message_text(
-                    f"❌ {pending['name']} so‘rovi rad etildi."
-                )
-
+        if str(new_admin) not in pending:
+            await query.edit_message_text(
+                "Bu so‘rov topilmadi yoki oldin ko‘rib chiqilgan."
+            )
             return
 
-        # ADMINNI CHIQARISH
-        elif operation == "remove":
+        if new_admin not in data["admin_ids"]:
+            data["admin_ids"].append(new_admin)
 
-            if target_id == OWNER_ID:
-                await query.message.reply_text(
-                    "⛔ Asosiy adminni chiqarib bo‘lmaydi."
-                )
-                return
+        pending.pop(str(new_admin), None)
+        save_data()
 
-            if target_id in data["admin_ids"]:
+        await query.edit_message_text(
+            "✅ Adminlik so‘rovi tasdiqlandi."
+        )
 
-                data["admin_ids"].remove(target_id)
-                data["admin_passwords"].pop(str(target_id), None)
-                save_data()
+        try:
+            await context.bot.send_message(
+                chat_id=new_admin,
+                text="✅ Adminlik so‘rovingiz tasdiqlandi. Botga /start yuboring."
+            )
+        except Exception as e:
+            print("Yangi adminga xabar yuborilmadi:", e)
 
-                try:
-                    await context.bot.send_message(
-                        chat_id=target_id,
-                        text="⛔ Siz adminlikdan chiqarildingiz."
-                    )
-                except Exception as e:
-                    print(f"Xabar yuborilmadi: {e}")
+        return
 
-                await query.edit_message_text(
-                    f"✅ {target_id} adminlikdan chiqarildi."
-                )
+    # ADMIN SO‘ROVINI RAD ETISH
+    if action.startswith("admin:reject:"):
 
-            else:
-                await query.message.reply_text(
-                    "Bu foydalanuvchi admin emas."
-                )
-
+        if user_id != OWNER_ID:
+            await query.message.reply_text(
+                "❌ Siz asosiy admin emassiz."
+            )
             return
 
-    # ADMIN KIRISHINI TEKSHIRISH
-    if not is_admin(update) or not context.user_data.get("authenticated"):
+        rejected_admin = int(action.split(":")[2])
+
+        if str(rejected_admin) not in data["pending_admins"]:
+            await query.edit_message_text(
+                "Bu so‘rov topilmadi yoki oldin ko‘rib chiqilgan."
+            )
+            return
+
+        data["pending_admins"].pop(str(rejected_admin), None)
+        save_data()
+
+        await query.edit_message_text(
+            "❌ Adminlik so‘rovi rad etildi."
+        )
+
+        try:
+            await context.bot.send_message(
+                chat_id=rejected_admin,
+                text="Adminlik so‘rovingiz rad etildi."
+            )
+        except Exception as e:
+            print("Foydalanuvchiga xabar yuborilmadi:", e)
+
+        return
+
+    # ADMIN TEKSHIRUVI
+    if not is_admin(user_id):
+        await query.message.reply_text("❌ Siz admin emassiz.")
+        return
+
+    if not context.user_data.get("authenticated"):
         await query.message.reply_text(
-            "🔒 Avval admin sifatida parol bilan kiring."
+            "Avval admin kodini kiriting: /start"
         )
         return
 
-    # CHIQISH
-    if action == "logout":
-        context.user_data.clear()
-
-        await query.message.reply_text(
-            "🔒 Tizimdan chiqdingiz. /start orqali qayta kiring."
-        )
-
     # XABAR YOZISH
-    elif action == "message":
-        context.user_data["waiting"] = "message"
-
+    if action == "message":
+        context.user_data["awaiting_message"] = True
         await query.message.reply_text(
-            "✍️ Xabar matnini yuboring:"
+            "✍️ Yuboriladigan xabarni yozing:"
         )
 
     # VAQT SOZLASH
     elif action == "interval":
-        context.user_data["waiting"] = "interval"
+        context.user_data["awaiting_interval"] = True
+        await query.message.reply_text(
+            "⏱ Xabarlar orasidagi vaqtni sekundda kiriting.\n"
+            "Eng kamida 60 sekund."
+        )
+
+    # GURUHLAR
+    elif action == "groups":
+        await query.message.reply_text(
+            f"👥 Bot qo‘shilgan guruhlar soni: {len(data['groups'])}"
+        )
+
+    # STATISTIKA
+    elif action == "stats":
+        jobs = (
+            context.job_queue.get_jobs_by_name("broadcast")
+            if context.job_queue else []
+        )
+
+        status = "Ishlayapti 🟢" if jobs else "To‘xtatilgan 🔴"
 
         await query.message.reply_text(
-            "⏱ Intervalni soniyada kiriting. Masalan: 300"
+            "📊 STATISTIKA\n\n"
+            f"Guruhlar: {len(data['groups'])}\n"
+            f"Holati: {status}\n"
+            f"Oraliq: {data['interval']} sekund"
         )
 
     # BOSHLASH
     elif action == "start":
 
-        if not data["groups"] or not data["message"]:
+        if not data["groups"]:
             await query.message.reply_text(
-                "❌ Guruh yoki xabar mavjud emas."
+                "❌ Avval botni guruhga qo‘shing."
             )
             return
 
-        if context.job_queue.get_jobs_by_name("broadcast"):
+        if not data["message"]:
             await query.message.reply_text(
-                "Bot allaqachon ishlayapti."
+                "❌ Avval yuboriladigan xabarni kiriting."
+            )
+            return
+
+        if context.job_queue is None:
+            await query.message.reply_text(
+                "❌ JobQueue ishlamayapti. Kutubxonani tekshiring."
+            )
+            return
+
+        old_jobs = context.job_queue.get_jobs_by_name("broadcast")
+
+        if old_jobs:
+            await query.message.reply_text(
+                "Xabar yuborish allaqachon ishlayapti."
             )
             return
 
@@ -465,216 +394,178 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         await query.message.reply_text(
-            "▶️ Yuborish boshlandi!"
+            "✅ Xabar yuborish boshlandi!"
         )
 
     # TO‘XTATISH
     elif action == "stop":
 
+        if context.job_queue is None:
+            await query.message.reply_text(
+                "JobQueue ishlamayapti."
+            )
+            return
+
         jobs = context.job_queue.get_jobs_by_name("broadcast")
+
+        if not jobs:
+            await query.message.reply_text(
+                "Xabar yuborish hozir ishlamayapti."
+            )
+            return
 
         for job in jobs:
             job.schedule_removal()
 
         await query.message.reply_text(
-            "⏹ Yuborish to‘xtatildi."
-        )
-
-    # GURUHLAR
-    elif action == "groups":
-        await query.message.reply_text(
-            f"👥 Guruhlar soni: {len(data['groups'])}"
-        )
-
-    # STATISTIKA
-    elif action == "stats":
-
-        jobs = context.job_queue.get_jobs_by_name("broadcast")
-        status = "Ishlayapti ✅" if jobs else "To‘xtatilgan ⏹"
-
-        await query.message.reply_text(
-            f"📊 STATISTIKA\n\n"
-            f"Guruhlar: {len(data['groups'])}\n"
-            f"Adminlar: {len(data['admin_ids'])}\n"
-            f"Kutilayotgan so‘rovlar: {len(data['pending_admins'])}\n"
-            f"Interval: {data['interval']} soniya\n"
-            f"Holati: {status}"
+            "⛔ Xabar yuborish to‘xtatildi!"
         )
 
     # ADMINLAR
     elif action == "admins":
-
-        if uid != OWNER_ID:
-            await query.message.reply_text(
-                "⛔ Adminlar ro‘yxatini faqat asosiy admin ko‘radi."
-            )
-            return
-
-        await show_admins(query)
-
-    # ASOSIY MENYU
-    elif action == "back_menu":
-
-        if uid != OWNER_ID:
-            await query.message.reply_text("⛔ Ruxsat yo‘q.")
-            return
+        admins = data["admin_ids"]
+        text_admins = "\n".join(str(x) for x in admins)
 
         await query.message.reply_text(
-            "👑 Asosiy admin paneli",
-            reply_markup=menu()
+            "👑 ADMINLAR RO‘YXATI:\n\n" + text_admins
         )
-# FOYDALANUVCHILARDAN KELGAN XABARLAR
-async def receive_text(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    uid = update.effective_user.id
-    incoming_text = update.message.text
 
-    # ASOSIY ADMIN PAROLI
-    if uid == OWNER_ID and context.user_data.get("awaiting_password"):
+    # CHIQISH
+    elif action == "logout":
+        context.user_data["authenticated"] = False
 
-        if incoming_text == ADMIN_PASSWORD:
+        await query.message.reply_text(
+            "🔒 Admin paneldan chiqdingiz. "
+            "Qayta kirish uchun /start yuboring."
+        )
+
+
+# ==================================
+# FOYDALANUVCHI XABARLARI
+# ==================================
+
+async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    # ADMIN PAROLI
+    if context.user_data.get("awaiting_code"):
+        context.user_data["awaiting_code"] = False
+
+        if text == ADMIN_PASSWORD:
+
+            if not is_admin(user_id):
+                await update.message.reply_text(
+                    "Siz admin sifatida tasdiqlanmagansiz."
+                )
+                return
+
             context.user_data["authenticated"] = True
-            context.user_data.pop("awaiting_password", None)
 
             await update.message.reply_text(
-                "✅ Parol to‘g‘ri!\n👑 Admin paneli ochildi.",
-                reply_markup=menu()
+                "✅ Admin panelga xush kelibsiz!"
             )
+
+            await send_menu(update.message)
         else:
             await update.message.reply_text(
-                "❌ Parol noto‘g‘ri."
+                "❌ Admin kodi noto‘g‘ri. Qayta /start yuboring."
             )
 
         return
 
-    # YANGI ADMIN PAROL YARATISH
-    if uid in data["admin_ids"] and uid != OWNER_ID:
+    # XABAR SAQLASH
+    if context.user_data.get("awaiting_message"):
+        context.user_data["awaiting_message"] = False
 
-        if context.user_data.get("setting_admin_password"):
-
-            if len(incoming_text) < 6:
-                await update.message.reply_text(
-                    "❌ Parol kamida 6 ta belgidan iborat bo‘lsin."
-                )
-                return
-
-            data["admin_passwords"][str(uid)] = hash_password(
-                incoming_text
+        if not is_admin(user_id) or not context.user_data.get("authenticated"):
+            await update.message.reply_text(
+                "Avval admin panelga kiring."
             )
-
-            save_data()
-
-            context.user_data.pop("setting_admin_password", None)
-            context.user_data["authenticated"] = True
-
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-
-            await context.bot.send_message(
-                chat_id=update.effective_chat.id,
-                text="✅ Parolingiz yaratildi. Admin paneli ochildi.",
-                reply_markup=menu()
-            )
-
             return
 
-        # ADMIN PAROLINI TEKSHIRISH
-        if context.user_data.get("awaiting_admin_login"):
-
-            stored = data["admin_passwords"].get(str(uid))
-
-            if stored and check_password(incoming_text, stored):
-
-                context.user_data.pop("awaiting_admin_login", None)
-                context.user_data["authenticated"] = True
-
-                try:
-                    await update.message.delete()
-                except Exception:
-                    pass
-
-                await context.bot.send_message(
-                    chat_id=update.effective_chat.id,
-                    text="✅ Parol to‘g‘ri! Admin paneli ochildi.",
-                    reply_markup=menu()
-                )
-
-            else:
-                await update.message.reply_text(
-                    "❌ Parol noto‘g‘ri. Qayta urinib ko‘ring."
-                )
-
-            return
-
-    # ADMIN HUQUQINI TEKSHIRISH
-    if not is_admin(update) or not context.user_data.get("authenticated"):
-        return
-
-    waiting = context.user_data.get("waiting")
-
-    # XABARNI SAQLASH
-    if waiting == "message":
-
-        data["message"] = incoming_text
+        data["message"] = text
         save_data()
 
-        context.user_data.pop("waiting", None)
-
         await update.message.reply_text(
-            "✅ Xabar saqlandi!",
-            reply_markup=menu()
+            "✅ Xabar saqlandi. Endi Boshlash tugmasini bosing."
         )
 
-    # VAQTNI SAQLASH
-    elif waiting == "interval":
+        await send_menu(update.message)
+        return
+
+    # VAQT SAQLASH
+    if context.user_data.get("awaiting_interval"):
+        context.user_data["awaiting_interval"] = False
+
+        if not is_admin(user_id) or not context.user_data.get("authenticated"):
+            await update.message.reply_text(
+                "Avval admin panelga kiring."
+            )
+            return
 
         try:
-            seconds = int(incoming_text)
+            interval = int(text)
 
-            if seconds < MIN_INTERVAL:
+            if interval < MIN_INTERVAL:
                 await update.message.reply_text(
-                    "❌ Eng kam interval 60 soniya."
+                    "❌ Eng kamida 60 sekund kiriting."
                 )
+                context.user_data["awaiting_interval"] = True
                 return
 
-            data["interval"] = seconds
+            data["interval"] = interval
             save_data()
 
-            context.user_data.pop("waiting", None)
-
             await update.message.reply_text(
-                f"✅ Interval saqlandi: {seconds} soniya",
-                reply_markup=menu()
+                f"✅ Vaqt saqlandi: {interval} sekund."
             )
+
+            await send_menu(update.message)
 
         except ValueError:
             await update.message.reply_text(
-                "❌ Faqat raqam kiriting."
+                "❌ Faqat son kiriting. Masalan: 300"
             )
+            context.user_data["awaiting_interval"] = True
+
+        return
 
 
+# ==================================
+# XATOLIKLARNI ANIQLASH
+# ==================================
+
+async def error_handler(update, context):
+    print("Botda xatolik:", context.error)
+
+
+# ==================================
 # BOTNI ISHGA TUSHIRISH
+# ==================================
+
 def main():
 
-    app = Application.builder().token(TOKEN).build()
+    if not TOKEN:
+        raise ValueError(
+            "BOT_TOKEN kiritilmagan! CMD orqali tokenni sozlang."
+        )
 
-    app.add_handler(
-        CommandHandler("start", start)
+    if not ADMIN_PASSWORD:
+        raise ValueError(
+            "ADMIN_PASSWORD kiritilmagan! CMD orqali parolni sozlang."
+        )
+
+    app = (
+        Application.builder()
+        .token(TOKEN)
+        .build()
     )
+
+    app.add_handler(CommandHandler("start", start))
 
     app.add_handler(
         CallbackQueryHandler(buttons)
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
-            receive_text
-        )
     )
 
     app.add_handler(
@@ -684,9 +575,20 @@ def main():
         )
     )
 
-    print("BOT ISHGA TUSHDI!")
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            receive_text
+        )
+    )
 
-    app.run_polling()
+    app.add_error_handler(error_handler)
+
+    print("SHUKURULLO CONTROL BOT ISHGA TUSHDI!")
+
+    app.run_polling(
+        allowed_updates=Update.ALL_TYPES
+    )
 
 
 if __name__ == "__main__":
